@@ -1,0 +1,65 @@
+This directory contains code vendored from TIO-IKIM/CellViT.
+Original repository: https://github.com/TIO-IKIM/CellViT
+
+Required citation:
+  Hoerst, F. et al. (2023). CellViT: Vision Transformers for Precise Cell
+  Segmentation and Classification. https://doi.org/10.48550/ARXIV.2306.15350
+
+--- Original License ---
+
+LICENSE
+This repository contains three components with distinct licensing terms:
+
+-----------------------------------------------------------------------
+1. SAM-Derivative Components
+Includes: Retrained model weights and code derived from Meta's Segment Anything Model (SAM).
+License: Apache License 2.0 (full text in Appendix A).
+Restrictions: None beyond Apache 2.0.
+
+-----------------------------------------------------------------------
+2. HIPT-Derivative Components
+Includes: Retrained model weights and code derived from Mahmood Lab's HIPT-16/256 models.
+License: Apache License 2.0, modified by the Commons Clause below:
+
+Commons Clause Restriction (HIPT)
+You may not sell, rent, or commercially exploit the HIPT-Derivative Components without explicit written permission from Mahmood Lab. This restriction applies in addition to Apache 2.0 terms.
+
+Software: HIPT
+Licensor: Mahmood Lab
+
+-----------------------------------------------------------------------
+3. Original Code
+Includes: Code authored by Fabian Hörst and Jens Kleesiek (e.g., segmentation head, training scripts). Including training, inference and postprocessing code (all code
+not falling in (1) or (2))
+
+License: Apache License 2.0, modified by the Commons Clause and attribution terms below:
+
+Commons Clause Restriction (Original Code)
+You may not sell, rent, or commercially exploit the Original Code without explicit written permission from Fabian Hörst and Jens Kleesiek.
+
+Required Attribution:
+If any part of this work is used, you must cite:
+Hörst, F., Rempe, M., Heine, L., Seibold, C., Keyl, J., Baldini, G., Ugurel, S., Siveke, J., Grünwald, B., Egger, J., & Kleesiek, J. (2023). CellViT: Vision Transformers for precise cell segmentation and classification. https://doi.org/10.48550/ARXIV.2306.15350
+
+=======================================================================
+APPENDIX A: Apache License 2.0
+
+                                 Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+   (Full Apache 2.0 text available at http://www.apache.org/licenses/LICENSE-2.0)
+
+=======================================================================
+COMPLIANCE SUMMARY
+
+Component               | License                     | Key Restrictions
+------------------------|-----------------------------|-------------------------------------------
+SAM-Derivative          | Apache 2.0                  | None
+HIPT-Derivative         | Apache 2.0 + Commons Clause | No commercial sale without permission
+Original/Inference Code | Apache 2.0 + Commons Clause | No commercial sale; mandatory citation
+
+=======================================================================
+By using this software, you agree to comply with all applicable terms.

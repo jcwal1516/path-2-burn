@@ -1,0 +1,13 @@
+[package]
+name = "vit-burn"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license.workspace = true
+description = "timm and DINOv2 Vision Transformers in Burn, with the original checkpoint parameter names."
+
+[dependencies]
+burn = { workspace = true, features = ["std"] }
+
+[dev-dependencies]
+burn = { workspace = true, features = ["std", "flex"] }

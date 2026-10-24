@@ -1,0 +1,10 @@
+/target
+/weights/
+# Reference fixtures are cut from local slides and written by export/; never committed.
+/fixtures/
+/export/.venv/
+__pycache__/
+*.onnx
+*.onnx.data
+*.bpk
+.DS_Store

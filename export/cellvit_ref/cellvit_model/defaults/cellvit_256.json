@@ -1,0 +1,49 @@
+{
+  "class_names": [
+    "background",
+    "neoplastic",
+    "inflammatory",
+    "connective",
+    "dead",
+    "epithelial"
+  ],
+  "num_classes": 6,
+  "input_size": 256,
+  "model_variant": "vit256",
+  "normalize_mean": [
+    0.5,
+    0.5,
+    0.5
+  ],
+  "normalize_std": [
+    0.5,
+    0.5,
+    0.5
+  ],
+  "vit_structure": "ViT256",
+  "num_nuclei_classes": 6,
+  "num_tissue_classes": 19,
+  "checkpoint_filename": "CellViT-256-x40.pth",
+  "checkpoint_sha256": "ee3986922fc500353db3d7692c566e19e1c694c8f10e47cf49dfd90160fc3b2b",
+  "tissue_names": [
+    "adrenal_gland",
+    "bile_duct",
+    "bladder",
+    "breast",
+    "cervix",
+    "colon",
+    "esophagus",
+    "head_neck",
+    "kidney",
+    "liver",
+    "lung",
+    "ovarian",
+    "pancreatic",
+    "prostate",
+    "skin",
+    "stomach",
+    "testis",
+    "thyroid",
+    "uterus"
+  ]
+}

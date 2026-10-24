@@ -1,0 +1,13 @@
+[package]
+name = "sam-burn"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license.workspace = true
+description = "Segment Anything (SAM) ViT image encoder in Burn, with the original checkpoint parameter names."
+
+[dependencies]
+burn = { workspace = true, features = ["std"] }
+
+[dev-dependencies]
+burn = { workspace = true, features = ["std", "flex"] }
