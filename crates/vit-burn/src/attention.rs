@@ -31,7 +31,7 @@ impl Attention {
     }
 
     /// `[batch, tokens, embed]` to `[batch, tokens, embed]`.
-    pub(crate) fn forward(&self, x: Tensor<3>) -> Tensor<3> {
+    pub(crate) fn forward(&self, x: Tensor<3>, bias: Option<Tensor<4>>) -> Tensor<3> {
         let [batch, tokens, embed] = x.dims();
         let (heads, head_dim) = (self.heads, embed / self.heads);
         let [q, k, v] = match (&self.qkv, &self.query, &self.key, &self.value) {
@@ -56,6 +56,10 @@ impl Attention {
             _ => unreachable!("attention has a fused or a separate q/k/v projection"),
         };
         let scores = (q * (head_dim as f64).powf(-0.5)).matmul(k.swap_dims(2, 3));
+        let scores = match bias {
+            Some(bias) => scores + bias,
+            None => scores,
+        };
         let x = softmax(scores, 3)
             .matmul(v)
             .swap_dims(1, 2)

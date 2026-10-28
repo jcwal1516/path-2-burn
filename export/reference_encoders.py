@@ -5,13 +5,16 @@ each checkpoint unchanged from Hugging Face at a pinned revision, with your own 
 (`hf auth login`, and the model's terms accepted on its page for gated repos), into
 WEIGHTS/<name>/, and adds it with its sha256 to WEIGHTS/manifest.json.
 
-`reference` builds each downloaded model the way its model card does (timm or
-transformers) and writes, under OUT/encoders/:
+`reference` builds each downloaded model the way its model card does (timm,
+transformers, or downloaded upstream code) and writes, under OUT/encoders/:
 
   tiles.bin               N RGB u8 tiles, 224x224 at 0.5 um/px: two crops of each
                           fixtures/tiles PNG (1024 px at 0.25 um/px) after 2x box reduction.
                           Written once and reused.
-  <name>/tokens.bin       every output token after the final norm, [N, tokens, width] float32
+  tiles_448.bin           CONCH v1/v1.5's 448x448 crops, also at 0.5 um/px.
+  <name>/tokens.bin       every output token, [N, tokens, width] float32. PLIP stores
+                          last_hidden_state before the class token's post_layernorm;
+                          other entries include final normalization.
   <name>/embedding.bin    the pooled embedding the card documents, [N, dim] float32
   <name>/meta.json        shapes, library versions and the checkpoint file
 
@@ -27,10 +30,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
+from urllib.request import urlopen
 
 import numpy as np
 import timm
@@ -39,14 +44,14 @@ import transformers
 from safetensors.torch import load_file
 from timm.layers import SwiGLUPacked
 from torch import nn
-from transformers import AutoModel
+from transformers import AutoModel, CLIPVisionConfig, CLIPVisionModelWithProjection
 
-from common import IMAGENET, checkpoint, download, fixture_crops, write_json
+from common import IMAGENET, checkpoint, download, fixture_crops, load_upstream_module, write_json
 
 # Bioptimus' H-optimus normalization.
 BIOPTIMUS = ((0.707223, 0.578729, 0.703617), (0.211883, 0.230117, 0.177517))
-TILE = 224
-CROPS = ((0, 0), (288, 288))  # top-left corners in the 512 px reduced tile
+CLIP_NORM = ((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
+CONCH_SOURCE_REVISION = "141cc09c7d4ff33d8eda562bd75169b457f71a62"
 BATCH = 4
 
 
@@ -57,7 +62,8 @@ class Spec:
     file: str
     build: Callable[[Path, Path], nn.Module]
     norm: tuple[tuple[float, float, float], tuple[float, float, float]] = IMAGENET
-    pooling: str = "cls"  # or "cls+mean": class token, then the mean of the patch tokens
+    pooling: str = "cls"  # also "cls+mean", "conch" attention pooling, or "plip" projection
+    tile: int = 224
     # Published sha256 of `file`, when the repo is public; gated repos hide it.
     sha256: str | None = None
     extra_files: tuple[str, ...] = field(default=("config.json",))
@@ -103,6 +109,71 @@ VIRCHOW_BUILD = timm_hub(mlp_layer=SwiGLUPacked, act_layer=nn.SiLU)
 
 def transformers_auto(folder: Path, _weights: Path) -> nn.Module:
     return AutoModel.from_pretrained(folder, torch_dtype=torch.float32)
+
+
+def conch_v1_5(folder: Path, weights: Path) -> nn.Module:
+    """The upstream build_conch architecture, with a strict local checkpoint load."""
+    source = importlib.util.spec_from_file_location("conch_v1_5", folder / "conch_v1_5.py")
+    assert source is not None and source.loader is not None
+    upstream = importlib.util.module_from_spec(source)
+    source.loader.exec_module(upstream)
+    cfg = json.loads((folder / "config.json").read_text())["conch_config"]
+    trunk = upstream.VisionTransformer(
+        patch_size=cfg["patch_size"], embed_dim=cfg["context_dim"], depth=cfg["depth"],
+        num_heads=cfg["num_heads"], mlp_ratio=cfg["mlp_ratio"],
+        qkv_bias=cfg["qkv_bias"], init_values=cfg["init_values"],
+    )
+    pooler = upstream.AttentionalPooler(
+        d_model=cfg["embed_dim"], context_dim=cfg["context_dim"],
+        n_queries=cfg["pooler_n_queries_contrast"],
+    )
+    model = upstream.EncoderWithAttentionalPooler(trunk, pooler, cfg["embed_dim"]).float()
+    model.load_state_dict(load_state(weights), strict=True)
+    return model
+
+
+def download_conch_source(folder: Path) -> None:
+    for name in ("vision_tower.py", "transformer.py", "utils.py", "model_configs/conch_ViT-B-16.json"):
+        target = folder / "upstream" / name
+        if not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with urlopen(f"https://raw.githubusercontent.com/mahmoodlab/CONCH/{CONCH_SOURCE_REVISION}/conch/open_clip_custom/{name}") as response:
+                target.write_bytes(response.read())
+
+
+def conch_v1(folder: Path, weights: Path) -> nn.Module:
+    upstream = load_upstream_module(folder / "upstream", "vision_tower")
+    cfg = json.loads((folder / "upstream/model_configs/conch_ViT-B-16.json").read_text())
+    vision = cfg["vision_cfg"]
+    trunk = timm.models.vision_transformer.VisionTransformer(
+        img_size=vision["image_size"], patch_size=vision["patch_size"], embed_dim=768,
+        depth=12, num_heads=12, mlp_ratio=4, num_classes=0, dynamic_img_size=True,
+    )
+    trunk.forward = trunk.forward_features
+    model = upstream.VisualModel(
+        cfg["embed_dim"], cfg["embed_dim_caption"], trunk, image_size=vision["image_size"],
+        use_attentional_pool_contrast=vision["attentional_pool_contrast"],
+        use_attentional_pool_caption=vision["attentional_pool_caption"],
+        n_queries_contrast=vision["n_queries_contrast"], n_queries_caption=vision["n_queries_caption"],
+        attn_pooler_heads=vision["attn_pooler_heads"], output_tokens=vision["output_tokens"],
+    ).float()
+    model.load_state_dict({k.removeprefix("visual."): v for k, v in load_state(weights).items()
+                           if k.startswith("visual.")}, strict=True)
+    return model
+
+
+def plip(folder: Path, weights: Path) -> nn.Module:
+    cfg = json.loads((folder / "config.json").read_text())
+    model = CLIPVisionModelWithProjection(CLIPVisionConfig(**cfg["vision_config"])).float()
+    state = {k: v for k, v in load_state(weights).items()
+             if k.startswith(("vision_model.", "visual_projection."))}
+    # transformers 4.x persisted this constant; current versions recreate it.
+    position_ids = state.pop("vision_model.embeddings.position_ids")
+    expected = torch.arange(model.vision_model.embeddings.num_positions).view(1, -1)
+    if not torch.equal(position_ids, expected):
+        raise ValueError("PLIP has unexpected position indices")
+    model.load_state_dict(state, strict=True)
+    return model
 
 
 ENCODERS: dict[str, Spec] = {
@@ -197,6 +268,26 @@ ENCODERS: dict[str, Spec] = {
         pooling="cls+mean",
         sha256="52c14f20386ca17c2af8a7bf32c31c352668a8fbf6aefc88d86be6eaa0c72ca1",
     ),
+    "conch_v1_5": Spec(
+        "MahmoodLab/TITAN",
+        "dac6773d9961cfc75503440676ff157a2c6e8d2e",
+        "conch_v1_5_pytorch_model.bin",
+        conch_v1_5,
+        pooling="conch",
+        tile=448,
+        extra_files=("config.json", "conch_v1_5.py"),
+    ),
+    "conch_v1": Spec(
+        "MahmoodLab/CONCH", "f9ca9f877171a28ade80228fb195ac5d79003357", "pytorch_model.bin",
+        conch_v1, norm=CLIP_NORM, pooling="conch", tile=448, extra_files=(),
+        sha256="40a9644b9ba0e83a74576e0a5e5f7313599fa9c9cdaf3c20f8a3e271b0e9ae7c",
+    ),
+    "plip": Spec(
+        "vinid/plip", "67ade53ddd32195868f422585f72698ef5d15094", "pytorch_model.bin",
+        plip, norm=CLIP_NORM, pooling="plip",
+        sha256="98a7f8d2a1f4a8fc8f6dedb3a16ff7efbe02a7ef67c93904c80bca9767c69630",
+        extra_files=("config.json", "preprocessor_config.json"),
+    ),
 }
 
 
@@ -211,17 +302,19 @@ def download_all(weights: Path, names: list[str]) -> None:
     for name in selected(names):
         spec = ENCODERS[name]
         download(weights, name, spec.repo, spec.revision, spec.file, spec.extra_files, spec.sha256)
+        if name == "conch_v1":
+            download_conch_source(weights / name)
 
 
-def fixture_tiles(out: Path) -> np.ndarray:
-    """[N, 224, 224, 3] u8, written once to OUT/encoders/tiles.bin and reused."""
-    path = out / "tiles.bin"
+def fixture_tiles(out: Path, tile: int = 224) -> np.ndarray:
+    """[N, tile, tile, 3] u8, cached separately for each input size."""
+    path = out / ("tiles.bin" if tile == 224 else f"tiles_{tile}.bin")
     if path.exists():
-        return np.fromfile(path, dtype=np.uint8).reshape(-1, TILE, TILE, 3)
-    tiles, provenance = fixture_crops(TILE, CROPS, reduce=2)
+        return np.fromfile(path, dtype=np.uint8).reshape(-1, tile, tile, 3)
+    tiles, provenance = fixture_crops(tile, ((0, 0), (512 - tile, 512 - tile)), reduce=2)
     out.mkdir(parents=True, exist_ok=True)
     tiles.tofile(path)
-    write_json(out / "tiles.json", provenance)
+    write_json(path.with_suffix(".json"), provenance)
     return tiles
 
 
@@ -246,18 +339,24 @@ def prefix_tokens(model: nn.Module) -> int:
 @torch.no_grad()
 def reference(weights: Path, out: Path, names: list[str]) -> None:
     out = out / "encoders"
-    tiles = fixture_tiles(out)
     for name in selected(names):
         spec = ENCODERS[name]
+        tiles = fixture_tiles(out, spec.tile)
         path = checkpoint(weights, name)
         model = spec.build(path.parent, path).eval().float()
+        trunk = model.trunk if spec.pooling == "conch" else model
         mean, std = (torch.tensor(v, dtype=torch.float32).view(1, 3, 1, 1) for v in spec.norm)
         all_tokens, embeddings = [], []
         for start in range(0, len(tiles), BATCH):
             x = torch.from_numpy(tiles[start : start + BATCH]).permute(0, 3, 1, 2).float() / 255.0
-            tokens = tokens_of(model, (x - mean) / std)
+            tokens = tokens_of(trunk, (x - mean) / std)
             all_tokens.append(tokens)
-            embeddings.append(pool(tokens, spec.pooling, prefix_tokens(model)))
+            if spec.pooling == "conch":
+                embeddings.append(model.ln_contrast(model.attn_pool_contrast(tokens)[:, 0]))
+            elif spec.pooling == "plip":
+                embeddings.append(model.visual_projection(model.vision_model.post_layernorm(tokens[:, 0])))
+            else:
+                embeddings.append(pool(tokens, spec.pooling, prefix_tokens(trunk)))
         tokens = torch.cat(all_tokens).contiguous()
         embedding = torch.cat(embeddings).contiguous()
         folder = out / name
@@ -270,14 +369,16 @@ def reference(weights: Path, out: Path, names: list[str]) -> None:
             "checkpoint": path.name,
             "tokens_shape": list(tokens.shape),
             "embedding_shape": list(embedding.shape),
-            "prefix_tokens": prefix_tokens(model),
+            "prefix_tokens": prefix_tokens(trunk),
             "torch": torch.__version__,
             "timm": timm.__version__,
             "transformers": transformers.__version__,
         }
+        if name == "conch_v1":
+            meta["source_revision"] = CONCH_SOURCE_REVISION
         write_json(folder / "meta.json", meta)
         print(f"{name}: tokens {tuple(tokens.shape)} embedding {tuple(embedding.shape)}")
-        del model
+        del model, trunk
 
 
 def main() -> None:

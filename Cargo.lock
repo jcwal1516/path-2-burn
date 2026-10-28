@@ -1150,6 +1150,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "clipper2-rust"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "210e9ea90a5f6c731c23bf642383ad7c006d8b24803c5c33afd5aaeae5a33f66"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "codespan-reporting"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4252,6 +4261,7 @@ version = "0.1.0"
 dependencies = [
  "burn",
  "burn-store",
+ "clipper2-rust",
  "cubecl-runtime",
  "cubecl-wgpu",
  "image",

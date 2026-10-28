@@ -13,6 +13,7 @@ share a package that contains them.
 | `cellpose_sam/cpsam` | Unchanged [mouseland/cellpose-sam](https://huggingface.co/mouseland/cellpose-sam) checkpoint, fetched by `export/reference_cellpose.py download` | BSD-3-Clause |
 | `hovernet_*` | Unchanged vqdang/hover_net checkpoints (README, Google Drive), you download them | Code MIT. The PanNuke weights carry PanNuke's CC BY-NC-SA 4.0; check each dataset's terms for the others. |
 | `instanseg_net.safetensors`, `instanseg_postprocess.json` | Extracted from your copy of InstanSeg `brightfield_nuclei` 0.1.1 (instanseg-torch) by `export/export_instanseg.py` | Apache-2.0 |
+| `stardist_*/model.safetensors` | Convolution tensors extracted from the three [QuPath StarDist graphs](https://github.com/qupath/models/tree/main/stardist), trained by Uwe Schmidt and Martin Weigert | BSD-3-Clause; see upstream model and training-data notices |
 
 ## Tile encoders
 
@@ -32,10 +33,23 @@ using your own account: gated models need you to accept their terms on the page 
 | Phikon | [owkin/phikon](https://huggingface.co/owkin/phikon) | `model.safetensors` | Owkin non-commercial | Public |
 | Phikon-v2 | [owkin/phikon-v2](https://huggingface.co/owkin/phikon-v2) | `model.safetensors` | Owkin non-commercial | Public |
 | Midnight-12k | [kaiko-ai/midnight](https://huggingface.co/kaiko-ai/midnight) | `model.safetensors` | MIT | Public |
+| CONCH v1.5 | [MahmoodLab/TITAN](https://huggingface.co/MahmoodLab/TITAN) | `conch_v1_5_pytorch_model.bin` | CC-BY-NC-ND 4.0; non-commercial academic research; no redistribution of weights or derived datasets | Gated; institutional email |
+| CONCH v1 | [MahmoodLab/CONCH](https://huggingface.co/MahmoodLab/CONCH) | `pytorch_model.bin` | CC-BY-NC-ND 4.0; non-commercial academic research; no redistribution of weights or derived datasets | Gated; institutional email |
+| PLIP | [vinid/plip](https://huggingface.co/vinid/plip) | `pytorch_model.bin` | No explicit weight license listed; see the model card's research-use and deployment restrictions | Public |
 
 Non-commercial and no-derivatives terms apply to the weights and to what you build from
 them; they do not change the license of this crate's code. Each model card asks for a
 citation; see the card.
+
+## Slide encoders
+
+| Model | Upstream | File | Terms | Access |
+|---|---|---|---|---|
+| TITAN | [MahmoodLab/TITAN](https://huggingface.co/MahmoodLab/TITAN) | `model.safetensors` | CC-BY-NC-ND 4.0; non-commercial academic research; no redistribution of weights or derived datasets | Gated; institutional email |
+
+TITAN's slide encoder loads its vision weights from the original checkpoint;
+the unused text tower, captioning pooler and vision-language projection remain
+in the file. Each user obtains their own checkpoint under the upstream terms.
 
 ## Required citations
 
@@ -52,3 +66,15 @@ citation; see the card.
 - Goldsborough, T. et al. (2024). InstanSeg: an embedding-based instance
   segmentation algorithm optimized for accurate, efficient and portable cell
   segmentation. https://doi.org/10.48550/arXiv.2408.15954
+- Ding, T., Wagner, S. J., Song, A. H., Chen, R. J. et al. (2025).
+  A multimodal whole-slide foundation model for pathology. Nature Medicine.
+  https://doi.org/10.1038/s41591-025-03982-3
+- Schmidt, U., Weigert, M., Broaddus, C. & Myers, G. (2018).
+  Cell Detection with Star-convex Polygons. MICCAI.
+  https://doi.org/10.1007/978-3-030-00934-2_30
+- Lu, M. Y., Chen, B., Williamson, D. F. K. et al. (2024).
+  A visual-language foundation model for computational pathology. Nature Medicine.
+  https://doi.org/10.1038/s41591-024-02856-4
+- Huang, Z., Bianchi, F., Yuksekgonul, M., Montine, T. J. & Zou, J. (2023).
+  A visual–language foundation model for pathology image analysis using medical
+  Twitter. Nature Medicine. https://doi.org/10.1038/s41591-023-02504-3

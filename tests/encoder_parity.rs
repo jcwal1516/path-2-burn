@@ -2,7 +2,7 @@
 //!
 //! `export/reference_encoders.py download` fetches each checkpoint with your own
 //! Hugging Face access into weights/<name>/ and lists it in weights/manifest.json;
-//! `reference` writes fixtures/encoders/: N tiles of 224x224 at 0.5 µm/px (two crops
+//! `reference` writes fixtures/encoders/: N tiles at 0.5 µm/px (two crops
 //! of each fixtures/tiles PNG) and, per model, every output token and the pooled
 //! embedding from torch float32 on the CPU.
 //! The weights are large and mostly gated, so these tests are ignored by default:
@@ -21,6 +21,10 @@ use support::{assert_close_scaled, model_store, read_f32, read_tiles, root};
 /// |burn - torch| <= ATOL_SCALE * max|torch| + RTOL * |torch|. Torch on MPS
 /// differs from these CPU references by up to 0.0064 on Virchow2, whose tokens
 /// reach 50; Burn on the GPU by up to 0.0058.
+/// CONCH v1.5 on four tiles drifts by 8.1e-5 (tokens) / 1.1e-5 (embedding)
+/// in torch MPS; Burn on all 20 tiles stays below 5e-5 / 8e-6.
+/// On four tiles, torch MPS reaches 1.94e-4 / 1.43e-5 for CONCH v1 and
+/// 4.58e-5 / 1.01e-5 for PLIP (tokens / embedding).
 const ATOL_SCALE: f32 = 2e-4;
 const RTOL: f32 = 1e-3;
 /// Tiles per forward pass.
@@ -29,7 +33,12 @@ const BATCH: usize = 4;
 fn check(encoder: &Encoder) {
     let fixtures = root().join("fixtures").join("encoders");
     let tile_bytes = encoder.tile * encoder.tile * 3;
-    let (tiles, count) = read_tiles(&fixtures.join("tiles.bin"), tile_bytes);
+    let tile_file = if encoder.tile == 224 {
+        "tiles.bin".to_string()
+    } else {
+        format!("tiles_{}.bin", encoder.tile)
+    };
+    let (tiles, count) = read_tiles(&fixtures.join(tile_file), tile_bytes);
 
     let (device, _) = select_device();
     let model = TileEncoder::load(&model_store(), &device, encoder)
@@ -77,4 +86,7 @@ support::parity_tests! {
     phikon => encoders::PHIKON,
     phikon_v2 => encoders::PHIKON_V2,
     midnight_12k => encoders::MIDNIGHT_12K,
+    conch_v1_5 => encoders::CONCH_V1_5,
+    conch_v1 => encoders::CONCH_V1,
+    plip => encoders::PLIP,
 }

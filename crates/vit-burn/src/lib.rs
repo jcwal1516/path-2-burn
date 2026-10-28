@@ -20,7 +20,7 @@ mod mlp;
 pub mod naming;
 mod resample;
 
-use block::Block;
+pub use block::Block;
 use burn::module::Param;
 use burn::nn::conv::{Conv2d, Conv2dConfig};
 use burn::nn::{LayerNorm, LayerNormConfig};
@@ -211,7 +211,7 @@ impl VisionTransformer {
         let mut x = self.embed(x);
         let mut intermediates = Vec::with_capacity(taps.len());
         for (i, block) in self.blocks.iter().enumerate() {
-            x = block.forward(x);
+            x = block.forward(x, None);
             if taps.contains(&i) {
                 intermediates.push(x.clone());
             }

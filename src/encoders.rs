@@ -6,6 +6,10 @@
 //! [`TileEncoder`] runs any entry. The weights are not distributed with this
 //! crate; `MODELS-NOTICE.md` lists where to download each one and its terms.
 
+mod clip;
+mod conch;
+mod conch_v1;
+
 use crate::preprocess::rgb_to_nchw;
 use crate::runtime::{Checkpoint, batch_from_f32, load_pytorch_weights, read_f32};
 use crate::store::{ModelError, ModelStore};
@@ -23,6 +27,8 @@ pub enum Naming {
     HfDinov2,
     /// transformers `ViTModel`.
     HfVit,
+    /// transformers `CLIPVisionModel` with a projection.
+    HfClip,
 }
 
 /// How the output tokens become one embedding.
@@ -33,6 +39,12 @@ pub enum Pooling {
     /// The class token, then the mean of the patch tokens (register tokens
     /// excluded): twice the token width.
     ClassAndPatchMean,
+    /// CONCH v1.5's learned query over all tokens, then LayerNorm (768 values).
+    ConchAttention,
+    /// CONCH v1's unprojected, unnormalized 512-dimensional features.
+    ConchV1,
+    /// CLIP's post-normalized class token and learned 512-dimensional projection.
+    ClipProjection,
 }
 
 /// One published tile encoder.
@@ -59,6 +71,8 @@ impl Encoder {
         match self.pooling {
             Pooling::ClassToken => self.vit.embed_dim,
             Pooling::ClassAndPatchMean => 2 * self.vit.embed_dim,
+            Pooling::ConchAttention => 768,
+            Pooling::ConchV1 | Pooling::ClipProjection => 512,
         }
     }
 
@@ -67,6 +81,7 @@ impl Encoder {
             Naming::Timm => (&[], &[]),
             Naming::HfDinov2 => (naming::HF_DINOV2, naming::HF_DINOV2_UNUSED),
             Naming::HfVit => (naming::HF_VIT, naming::HF_VIT_UNUSED),
+            Naming::HfClip => (clip::RENAMES, &[]),
         };
         Checkpoint {
             state_dict_key: None,
@@ -215,8 +230,53 @@ pub const MIDNIGHT_12K: Encoder = Encoder {
     ..UNI
 };
 
+/// CONCH v1.5 (Mahmood Lab): ViT-L/16 at 448 px with attention pooling.
+pub const CONCH_V1_5: Encoder = Encoder {
+    name: "conch_v1_5",
+    upstream: "https://huggingface.co/MahmoodLab/TITAN",
+    vit: VitConfig {
+        pos_resample: PosResample::Dino,
+        ..UNI.vit
+    },
+    tile: 448,
+    pooling: Pooling::ConchAttention,
+    ..UNI
+};
+
+/// CONCH v1: `encode_image(proj_contrast=False, normalize=False)`.
+pub const CONCH_V1: Encoder = Encoder {
+    name: "conch_v1",
+    upstream: "https://huggingface.co/MahmoodLab/CONCH",
+    vit: VitConfig {
+        img_size: 448,
+        ..VitConfig::BASE_PATCH16_224
+    },
+    tile: 448,
+    mean: [0.481_454_66, 0.457_827_5, 0.408_210_73],
+    std: [0.268_629_54, 0.261_302_58, 0.275_777_11],
+    pooling: Pooling::ConchV1,
+    ..UNI
+};
+
+/// PLIP's CLIP ViT-B/32: projected image features, without L2 normalization.
+pub const PLIP: Encoder = Encoder {
+    name: "plip",
+    upstream: "https://huggingface.co/vinid/plip",
+    vit: VitConfig {
+        patch_size: 32,
+        mlp: MlpKind::QuickGelu,
+        fused_qkv: false,
+        norm_eps: 1e-5,
+        ..VitConfig::BASE_PATCH16_224
+    },
+    naming: Naming::HfClip,
+    tile: 224,
+    pooling: Pooling::ClipProjection,
+    ..CONCH_V1
+};
+
 /// Every tile encoder, for listing and tests.
-pub const ALL: [&Encoder; 10] = [
+pub const ALL: [&Encoder; 13] = [
     &UNI,
     &UNI2_H,
     &VIRCHOW,
@@ -227,12 +287,33 @@ pub const ALL: [&Encoder; 10] = [
     &PHIKON,
     &PHIKON_V2,
     &MIDNIGHT_12K,
+    &CONCH_V1_5,
+    &CONCH_V1,
+    &PLIP,
 ];
+
+enum Network {
+    Vit(VisionTransformer),
+    Conch(conch::Conch),
+    ConchV1(conch_v1::ConchV1),
+    Clip(clip::Clip),
+}
+
+impl Network {
+    fn tokens(&self, input: Tensor<4>) -> Tensor<3> {
+        match self {
+            Self::Vit(model) => model.forward(input),
+            Self::Conch(model) => model.trunk.forward(input),
+            Self::ConchV1(model) => model.tokens(input),
+            Self::Clip(model) => model.tokens(input),
+        }
+    }
+}
 
 /// A tile encoder's network on one device.
 pub struct TileEncoder {
     encoder: Encoder,
-    model: VisionTransformer,
+    model: Network,
     device: Device,
 }
 
@@ -242,12 +323,47 @@ impl TileEncoder {
         device: &Device,
         encoder: &Encoder,
     ) -> Result<Self, ModelError> {
-        let model = load_pytorch_weights(
-            encoder.vit.init(device),
-            store,
-            encoder.name,
-            &encoder.checkpoint(),
-        )?;
+        let naming = encoder.checkpoint();
+        let unused = match encoder.pooling {
+            Pooling::ConchV1 => conch_v1::unused_keys(),
+            Pooling::ClipProjection => clip::unused_keys(),
+            _ => Vec::new(),
+        };
+        let unused: Vec<&str> = unused.iter().map(String::as_str).collect();
+        let checkpoint = Checkpoint {
+            unused: if unused.is_empty() {
+                naming.unused
+            } else {
+                &unused
+            },
+            ..naming
+        };
+        let model = match encoder.pooling {
+            Pooling::ConchV1 => Network::ConchV1(load_pytorch_weights(
+                conch_v1::ConchV1::new(&encoder.vit, device),
+                store,
+                encoder.name,
+                &checkpoint,
+            )?),
+            Pooling::ClipProjection => Network::Clip(load_pytorch_weights(
+                clip::Clip::new(&encoder.vit, device),
+                store,
+                encoder.name,
+                &checkpoint,
+            )?),
+            Pooling::ConchAttention => Network::Conch(load_pytorch_weights(
+                conch::Conch::new(&encoder.vit, device),
+                store,
+                encoder.name,
+                &checkpoint,
+            )?),
+            _ => Network::Vit(load_pytorch_weights(
+                encoder.vit.init(device),
+                store,
+                encoder.name,
+                &checkpoint,
+            )?),
+        };
         Ok(Self {
             encoder: *encoder,
             model,
@@ -283,7 +399,8 @@ impl TileEncoder {
     }
 
     /// Every output token, `[batch, prefix + patches, embed]` flattened, for
-    /// parity checks and dense (per-patch) tasks.
+    /// parity checks and dense (per-patch) tasks. PLIP returns CLIP's last hidden
+    /// state before the class token's post-norm; other entries include final norm.
     pub fn tokens(&self, input: Vec<f32>) -> Result<Vec<f32>, ModelError> {
         let tokens = self.forward(input)?;
         read_f32(tokens, self.encoder.name)
@@ -292,7 +409,7 @@ impl TileEncoder {
     fn forward(&self, input: Vec<f32>) -> Result<Tensor<3>, ModelError> {
         let Encoder { name, tile, .. } = self.encoder;
         let input = batch_from_f32(input, [3, tile, tile], &self.device, name)?;
-        Ok(self.model.forward(input))
+        Ok(self.model.tokens(input))
     }
 
     fn pool(&self, tokens: Tensor<3>) -> Tensor<2> {
@@ -301,16 +418,20 @@ impl TileEncoder {
             .clone()
             .slice([0..batch, 0..1, 0..embed])
             .reshape([batch, embed]);
-        match self.encoder.pooling {
-            Pooling::ClassToken => class,
-            Pooling::ClassAndPatchMean => {
-                let prefix = self.model.prefix_tokens();
+        match (self.encoder.pooling, &self.model) {
+            (Pooling::ConchAttention, Network::Conch(model)) => model.pool(tokens),
+            (Pooling::ConchV1, Network::ConchV1(model)) => model.pool(tokens),
+            (Pooling::ClipProjection, Network::Clip(model)) => model.pool(tokens),
+            (Pooling::ClassToken, _) => class,
+            (Pooling::ClassAndPatchMean, _) => {
+                let prefix = self.encoder.vit.prefix_tokens();
                 let patches = tokens
                     .slice([0..batch, prefix..count, 0..embed])
                     .mean_dim(1)
                     .reshape([batch, embed]);
                 Tensor::cat(vec![class, patches], 1)
             }
+            _ => unreachable!("pooling needs the matching learned head"),
         }
     }
 }
@@ -361,6 +482,9 @@ mod tests {
                 ("phikon", 768),
                 ("phikon_v2", 1024),
                 ("midnight_12k", 3072),
+                ("conch_v1_5", 768),
+                ("conch_v1", 512),
+                ("plip", 512),
             ]
         );
         // Position-embedding rows: Virchow2 covers its registers, UNI2-h does not.
@@ -376,5 +500,7 @@ mod tests {
         assert_eq!(rows(&UNI2_H), 256);
         assert_eq!(rows(&PHIKON_V2), 197);
         assert_eq!(rows(&MIDNIGHT_12K), 1 + 37 * 37);
+        assert_eq!(rows(&CONCH_V1_5), 197);
+        assert_eq!(CONCH_V1_5.tile, 448);
     }
 }

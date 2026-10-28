@@ -8,7 +8,7 @@ use burn::nn::{LayerNorm, LayerNormConfig};
 use burn::prelude::*;
 
 #[derive(Module, Debug)]
-pub(crate) struct Block {
+pub struct Block {
     norm1: LayerNorm,
     attn: Attention,
     ls1: Option<LayerScale>,
@@ -18,7 +18,8 @@ pub(crate) struct Block {
 }
 
 impl Block {
-    pub(crate) fn new(config: &VitConfig, device: &Device) -> Self {
+    /// A pre-norm block with timm parameter names, initialized for checkpoint loading.
+    pub fn new(config: &VitConfig, device: &Device) -> Self {
         let embed = config.embed_dim;
         let norm = || {
             LayerNormConfig::new(embed)
@@ -36,8 +37,10 @@ impl Block {
         }
     }
 
-    pub(crate) fn forward(&self, x: Tensor<3>) -> Tensor<3> {
-        let attended = self.attn.forward(self.norm1.forward(x.clone()));
+    /// `[batch, tokens, width]` with an optional additive attention bias
+    /// broadcastable to `[batch, heads, tokens, tokens]` (for example 2D ALiBi).
+    pub fn forward(&self, x: Tensor<3>, bias: Option<Tensor<4>>) -> Tensor<3> {
+        let attended = self.attn.forward(self.norm1.forward(x.clone()), bias);
         let x = x + LayerScale::apply(&self.ls1, attended);
         let transformed = self.mlp.forward(self.norm2.forward(x.clone()));
         x + LayerScale::apply(&self.ls2, transformed)

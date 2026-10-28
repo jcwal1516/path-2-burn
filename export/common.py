@@ -4,10 +4,13 @@ manifest), fixture tiles and timing."""
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
+import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
+from types import ModuleType
 
 import numpy as np
 from PIL import Image
@@ -16,6 +19,14 @@ from PIL import Image
 TILES = Path(__file__).resolve().parent.parent / "fixtures" / "tiles"
 # ImageNet RGB mean and std, for inputs in [0, 1].
 IMAGENET = ((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
+
+
+def load_upstream_module(folder: Path, name: str) -> ModuleType:
+    """Import a downloaded reference module with its sibling relative imports."""
+    package = ModuleType(f"_path2burn_reference_{name}")
+    package.__path__ = [str(folder.resolve())]
+    sys.modules[package.__name__] = package
+    return importlib.import_module(f"{package.__name__}.{name}")
 
 
 def sha256(path: Path) -> str:

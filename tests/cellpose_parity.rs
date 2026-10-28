@@ -8,9 +8,9 @@
 
 mod support;
 
-use path_2_burn::cellpose::CellposeSam;
+use path_2_burn::cellpose::{CellposeSam, DynamicsOptions, compute_masks};
 use path_2_burn::select_device;
-use support::{assert_close, model_store, read_f32, read_tiles, root};
+use support::{assert_close, model_store, read_f32, read_le, read_tiles, root};
 
 const TILE: usize = CellposeSam::TILE;
 /// Float32 through 24 global-attention blocks, on flows of order 1-10.
@@ -53,4 +53,54 @@ fn cellpose_sam_matches_cellpose() {
         FLOW_ATOL,
         FLOW_RTOL,
     );
+    for (tile, flow) in flows.chunks_exact(3 * TILE * TILE).enumerate() {
+        let actual = compute_masks(flow, TILE, TILE, &DynamicsOptions::default()).expect("masks");
+        let reference: Vec<u32> = read_le(
+            &fixtures
+                .join("masks")
+                .join(format!("tile_{tile:02}"))
+                .join("masks.bin"),
+            u32::from_le_bytes,
+        );
+        assert_eq!(reference.len(), actual.len());
+        let count = *actual.iter().max().unwrap() as usize;
+        assert_eq!(
+            count,
+            *reference.iter().max().unwrap() as usize,
+            "tile {tile}: mask count"
+        );
+        let mut intersections = vec![vec![0usize; count + 1]; count + 1];
+        for (&a, &r) in actual.iter().zip(&reference) {
+            intersections[a as usize][r as usize] += 1;
+        }
+        let mut matched = vec![false; count + 1];
+        for row in intersections.iter().skip(1) {
+            let (label, &overlap) = row
+                .iter()
+                .enumerate()
+                .skip(1)
+                .max_by_key(|(_, n)| *n)
+                .unwrap();
+            assert!(!matched[label], "tile {tile}: merged masks");
+            matched[label] = true;
+            let actual_area: usize = row.iter().sum();
+            let reference_area: usize = intersections.iter().map(|row| row[label]).sum();
+            assert!(
+                overlap as f64 >= 0.9 * actual_area.max(reference_area) as f64,
+                "tile {tile}: mask shape changed"
+            );
+        }
+        // As for CellViT, allow small float32 boundary shifts while preserving
+        // every instance. Decoding fixed reference flows is bit-exact separately.
+        let boundary_changes = actual
+            .iter()
+            .zip(&reference)
+            .filter(|&(&a, &r)| (a == 0) != (r == 0))
+            .count();
+        println!("tile {tile}: {count} masks, {boundary_changes} foreground changes");
+        assert!(
+            boundary_changes as f64 / (TILE * TILE) as f64 <= 1e-4,
+            "tile {tile}: foreground changed"
+        );
+    }
 }

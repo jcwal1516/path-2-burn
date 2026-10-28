@@ -4,12 +4,14 @@
 
 use burn::nn::{Linear, LinearConfig};
 use burn::prelude::*;
-use burn::tensor::activation::{gelu, silu};
+use burn::tensor::activation::{gelu, sigmoid, silu};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MlpKind {
     /// `fc2(gelu(fc1(x)))` with the exact (erf) GELU.
     Gelu,
+    /// CLIP's `x * sigmoid(1.702 * x)`.
+    QuickGelu,
     /// `fc2(silu(a) * b)` where `fc1(x)` is `a` then `b` along the channels.
     SwiGlu,
 }
@@ -18,7 +20,8 @@ pub enum MlpKind {
 pub(crate) struct Mlp {
     fc1: Linear,
     fc2: Linear,
-    swiglu: bool,
+    #[module(skip)]
+    kind: MlpKind,
 }
 
 impl Mlp {
@@ -32,17 +35,19 @@ impl Mlp {
         Self {
             fc1: LinearConfig::new(embed, hidden).init(device),
             fc2: LinearConfig::new(inner, embed).init(device),
-            swiglu,
+            kind,
         }
     }
 
     pub(crate) fn forward(&self, x: Tensor<3>) -> Tensor<3> {
         let hidden = self.fc1.forward(x);
-        let hidden = if self.swiglu {
+        let hidden = if self.kind == MlpKind::SwiGlu {
             let [batch, tokens, width] = hidden.dims();
             let half = width / 2;
             let gate = hidden.clone().slice([0..batch, 0..tokens, 0..half]);
             silu(gate) * hidden.slice([0..batch, 0..tokens, half..width])
+        } else if self.kind == MlpKind::QuickGelu {
+            hidden.clone() * sigmoid(hidden * 1.702)
         } else {
             gelu(hidden)
         };

@@ -2,8 +2,10 @@
 //! encoder with 8 px patches and global attention in every block, read out to
 //! per-pixel flows and cell probability on 256 px tiles.
 //!
-//! This is the network and Cellpose's input normalization. Turning flows into
-//! masks (Cellpose's flow dynamics) is not ported yet.
+//! Includes input normalization and Cellpose 4.2's 2D flow-to-mask dynamics.
+
+mod dynamics;
+pub use dynamics::{DynamicsOptions, compute_masks};
 
 use crate::preprocess::channel_percentiles;
 use crate::runtime::{Checkpoint, batch_from_f32, load_pytorch_weights, read_f32};
@@ -89,6 +91,21 @@ impl CellposeSam {
         let side = Self::TILE;
         let input = batch_from_f32(input, [3, side, side], &self.device, NAME)?;
         read_f32(self.network.forward(input), NAME)
+    }
+
+    /// Decode normalized tiles to concatenated `[batch, 256, 256]` labels.
+    /// Label numbering starts at one independently in each tile.
+    pub fn masks(
+        &self,
+        input: Vec<f32>,
+        options: &DynamicsOptions,
+    ) -> Result<Vec<u32>, ModelError> {
+        let flows = self.flows(input)?;
+        let mut masks = Vec::with_capacity(flows.len() / 3);
+        for flow in flows.chunks_exact(3 * Self::TILE * Self::TILE) {
+            masks.extend(compute_masks(flow, Self::TILE, Self::TILE, options)?);
+        }
+        Ok(masks)
     }
 }
 

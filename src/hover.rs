@@ -12,6 +12,7 @@ mod contours;
 mod filters;
 mod morphology;
 mod watershed;
+pub(crate) use morphology::{fill_holes, remove_small_labels};
 
 use crate::runtime::read_f32;
 use crate::store::ModelError;
